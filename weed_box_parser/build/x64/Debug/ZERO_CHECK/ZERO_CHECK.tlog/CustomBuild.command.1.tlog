@@ -1,0 +1,10 @@
+^C:\USERS\FANG\DESKTOP\STUDY\DSTU_WORK\PLATFORM_BRAIN\WEED_BOX_PARSER\BUILD\CMAKEFILES\40FE88CFD01C0A04902C029C3C8DE34F\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser -BC:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build/weed_box_parser.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

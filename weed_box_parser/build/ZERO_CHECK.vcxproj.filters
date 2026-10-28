@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\fang\Desktop\study\DSTU_work\platform_brain\weed_box_parser\build\CMakeFiles\40fe88cfd01c0a04902c029c3c8de34f\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{1F8C3976-3B82-36A7-B802-E552A00A79BE}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,15 @@
+
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "intelliSenseMode": "windows-msvc-x64",
+            "cppStandard": "c++17",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "C:/Users/fang/Desktop/study/libraryCPP/opencv/build/include"
+            ]
+        }
+    ],
+    "version": 4
+}

@@ -1,0 +1,3 @@
+C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build/CMakeFiles/weed_box_parser.dir
+C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build/CMakeFiles/ZERO_CHECK.dir
