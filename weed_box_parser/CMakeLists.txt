@@ -14,6 +14,7 @@ find_package(OpenCV REQUIRED CONFIG)
 add_executable(weed_box_parser
     main.cpp
     sectors.cpp
+    spray_zone.cpp
 )
 
 target_include_directories(weed_box_parser PRIVATE

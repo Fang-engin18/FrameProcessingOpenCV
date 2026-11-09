@@ -1,20 +1,25 @@
-
 #include "sectors.h"
 
 #include <algorithm>
+#include <string>
 
 std::string getSectors(
     int frameWidth,
     int x,
     int y,
     int width,
-    int height
+    int height,
+    double minOverlapPercent
 ) {
     if (frameWidth <= 0 || width <= 0 || height <= 0) {
         return "";
     }
 
-    // Границы трех математически равных секторов.
+    if (minOverlapPercent < 0.0 || minOverlapPercent > 100.0) {
+        return "";
+    }
+
+    // Границы трёх равных вертикальных секторов.
     const double bounds[] = {
         0.0,
         frameWidth / 3.0,
@@ -37,6 +42,7 @@ std::string getSectors(
     std::string result;
 
     for (int i = 0; i < 3; ++i) {
+
         const double overlapLeft =
             std::max(boxLeft, bounds[i]);
 
@@ -50,9 +56,10 @@ std::string getSectors(
             overlapWidth * height;
 
         const double percentage =
-            overlapArea / boxArea;
+            (overlapArea / boxArea) * 100.0;
 
-        if (percentage >= 0.05) {
+        if (percentage >= minOverlapPercent) {
+
             if (!result.empty()) {
                 result += ";";
             }

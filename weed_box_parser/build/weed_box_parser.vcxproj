@@ -370,6 +370,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   <ItemGroup>
     <ClCompile Include="C:\Users\fang\Desktop\study\DSTU_work\platform_brain\weed_box_parser\main.cpp" />
     <ClCompile Include="C:\Users\fang\Desktop\study\DSTU_work\platform_brain\weed_box_parser\sectors.cpp" />
+    <ClCompile Include="C:\Users\fang\Desktop\study\DSTU_work\platform_brain\weed_box_parser\spray_zone.cpp" />
   </ItemGroup>
   <ItemGroup />
   <ItemGroup>

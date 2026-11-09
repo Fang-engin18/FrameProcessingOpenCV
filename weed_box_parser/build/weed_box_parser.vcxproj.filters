@@ -7,6 +7,9 @@
     <ClCompile Include="C:\Users\fang\Desktop\study\DSTU_work\platform_brain\weed_box_parser\sectors.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\fang\Desktop\study\DSTU_work\platform_brain\weed_box_parser\spray_zone.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="C:\Users\fang\Desktop\study\DSTU_work\platform_brain\weed_box_parser\CMakeLists.txt" />
