@@ -10,6 +10,7 @@ add_executable(weed_box_parser
     main.cpp
     sectors.cpp
     spray_zone.cpp
+    serial_port.cpp
 )
 
 target_link_libraries(weed_box_parser PRIVATE ws2_32)

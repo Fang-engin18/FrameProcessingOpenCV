@@ -4,6 +4,7 @@
 #include <ws2tcpip.h>
 
 #include <cstdint>
+#include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -13,12 +14,16 @@
 
 #include "sectors.h"
 #include "spray_zone.h"
+#include "serial_port.h"
 
 #pragma comment(lib, "Ws2_32.lib")
 
 namespace {
 constexpr unsigned short UDP_PORT = 5005;
 constexpr int MAX_BOXES = 32;
+constexpr const char* SERIAL_PORT = "COM16";
+constexpr unsigned long HEARTBEAT_MS = 200;
+constexpr unsigned long PYTHON_TIMEOUT_MS = 500;
 
 struct Config {
     int sectorCount = 3;
@@ -117,6 +122,18 @@ int main() {
     Config cfg;
     if (!loadConfig("spray_config.txt", cfg)) return 1;
 
+    // Тестовая прошивка ESP32 принимает одну цифру 0..7 (3 выхода).
+    // Настраиваемое количество секторов в C++ остаётся 1..16,
+    // но для данного аппаратного теста оно ограничено тремя.
+    if (cfg.sectorCount > 3) {
+        std::cerr << "ESP32 LED test supports at most 3 sectors. "
+                     "Set sector_count <= 3 in spray_config.txt.\n";
+        return 1;
+    }
+    SerialPort serial;
+    if (!serial.open(SERIAL_PORT)) return 1;
+    std::cout << "Serial connected: " << SERIAL_PORT << " @ 115200\n";
+
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
         std::cerr << "WSAStartup failed\n";
@@ -140,7 +157,7 @@ int main() {
         return 1;
     }
 
-    DWORD timeoutMs = 500;
+    DWORD timeoutMs = 50;
     setsockopt(server, SOL_SOCKET, SO_RCVTIMEO,
                reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
 
@@ -153,58 +170,89 @@ int main() {
 
     std::uint32_t previousMask = 0;
     bool connectionActive = false;
+    using Clock = std::chrono::steady_clock;
+    auto lastValidFrame = Clock::now();
+    auto lastSerialSend = Clock::now() - std::chrono::milliseconds(HEARTBEAT_MS);
+    auto sendCurrentMask = [&](bool force) -> bool {
+        const auto now = Clock::now();
+        if (!force && now - lastSerialSend < std::chrono::milliseconds(HEARTBEAT_MS))
+            return true;
+        if (!serial.sendMask(static_cast<std::uint8_t>(previousMask))) return false;
+        lastSerialSend = now;
+        return true;
+    };
+    // Отправка 0 на старте; при открытии порта ESP32 может перезагрузиться.
+    if (!sendCurrentMask(true)) {
+        closesocket(server);
+        WSACleanup();
+        return 1;
+    }
     while (true) {
         char buffer[4096];
         sockaddr_in sender{};
         int senderLen = sizeof(sender);
-        int size = recvfrom(server, buffer, sizeof(buffer), 0,
-                            reinterpret_cast<sockaddr*>(&sender), &senderLen);
+        const int size = recvfrom(server, buffer, sizeof(buffer), 0,
+                                  reinterpret_cast<sockaddr*>(&sender), &senderLen);
         if (size == SOCKET_ERROR) {
-            if (WSAGetLastError() == WSAETIMEDOUT) {
-                if (connectionActive) {
-                    std::cout << "Python timeout: mask -> 0 (safe state)\n";
-                    previousMask = 0;
-                    connectionActive = false;
-                }
-                continue;
+            const int error = WSAGetLastError();
+            if (error != WSAETIMEDOUT) {
+                std::cerr << "recvfrom failed: " << error << "\n";
+                break;
             }
-            std::cerr << "recvfrom failed: " << WSAGetLastError() << "\n";
-            break;
+        } else if (sender.sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
+            int frameWidth = 0, frameHeight = 0;
+            std::vector<Box> boxes;
+            std::uint32_t mask = 0;
+            if (parseFrame(std::string(buffer, buffer + size),
+                           frameWidth, frameHeight, boxes)) {
+                for (const Box& b : boxes) {
+                    if (isInSprayZone(frameHeight, b.y, b.height,
+                                      cfg.zoneTopPercent, cfg.zoneBottomPercent)) {
+                        mask |= getSectorMask(frameWidth, b.x, b.y, b.width, b.height,
+                                              cfg.sectorOverlapPercent, cfg.sectorCount);
+                    }
+                }
+                if (!connectionActive || mask != previousMask) {
+                    std::cout << "Objects: " << boxes.size() << " | mask: "
+                              << binaryMask(mask, cfg.sectorCount) << " (" << mask << ")\n";
+                }
+                const bool changed = mask != previousMask;
+                previousMask = mask;
+                connectionActive = true;
+                lastValidFrame = Clock::now();
+                if (changed && !sendCurrentMask(true)) break;
+            } else {
+                if (previousMask != 0) std::cout << "Invalid frame: mask -> 0\n";
+                const bool changed = previousMask != 0;
+                previousMask = 0;
+                connectionActive = false;
+                if (changed && !sendCurrentMask(true)) break;
+            }
+            std::ostringstream out;
+            out << std::setprecision(8) << "STATE " << cfg.sectorCount << ' '
+                << cfg.zoneTopPercent << ' ' << cfg.zoneBottomPercent << ' '
+                << cfg.sectorOverlapPercent << ' ' << previousMask;
+            const std::string reply = out.str();
+            sendto(server, reply.data(), static_cast<int>(reply.size()), 0,
+                   reinterpret_cast<sockaddr*>(&sender), senderLen);
         }
-        // Local-only control channel.
-        if (sender.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) continue;
 
-        int frameWidth = 0, frameHeight = 0;
-        std::vector<Box> boxes;
-        std::uint32_t mask = 0;
-        if (parseFrame(std::string(buffer, buffer + size), frameWidth, frameHeight, boxes)) {
-            for (const Box& b : boxes) {
-                if (isInSprayZone(frameHeight, b.y, b.height,
-                                  cfg.zoneTopPercent, cfg.zoneBottomPercent)) {
-                    mask |= getSectorMask(frameWidth, b.x, b.y, b.width, b.height,
-                                          cfg.sectorOverlapPercent, cfg.sectorCount);
-                }
-            }
-            if (!connectionActive || mask != previousMask) {
-                std::cout << "Objects: " << boxes.size() << " | mask: "
-                          << binaryMask(mask, cfg.sectorCount) << " (" << mask << ")\n";
-            }
-            connectionActive = true;
-            previousMask = mask;
-        } else {
-            // Invalid input means no actuation; do not trust stale coordinates.
-            if (previousMask != 0) std::cout << "Invalid frame: mask -> 0\n";
+        // Не оставляем старую маску после потери корректных кадров.
+        if (connectionActive &&
+            Clock::now() - lastValidFrame >= std::chrono::milliseconds(PYTHON_TIMEOUT_MS)) {
+            std::cout << "Python timeout: mask -> 0 (safe state)\n";
+            const bool changed = previousMask != 0;
             previousMask = 0;
+            connectionActive = false;
+            if (changed && !sendCurrentMask(true)) break;
         }
-
-        std::ostringstream out;
-        out << std::setprecision(8) << "STATE " << cfg.sectorCount << ' '
-            << cfg.zoneTopPercent << ' ' << cfg.zoneBottomPercent << ' '
-            << cfg.sectorOverlapPercent << ' ' << mask;
-        const std::string reply = out.str();
-        sendto(server, reply.data(), static_cast<int>(reply.size()), 0,
-               reinterpret_cast<sockaddr*>(&sender), senderLen);
+        // Даже при неизменной маске шлём подтверждение каждые 200 мс.
+        // Иначе ESP32 сама отключит выходы через 1000 мс.
+        if (!sendCurrentMask(false)) break;
     }
+    // При штатном выходе пытаемся выключить выходы.
+    previousMask = 0;
+    serial.sendMask(0);
 
     closesocket(server);
     WSACleanup();

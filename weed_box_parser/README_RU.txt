@@ -1,19 +1,34 @@
-Схема: Python = камера + bounding boxes. C++ = сектора + зона + битовая маска.
+Тест: камера -> Python (только обнаружение руки) -> UDP -> C++ (сектора/зона/маска)
+      -> USB COM16 (115200, ASCII '0'..'7' + '\n') -> ESP32 DevKit -> три светодиода.
+Также C++ возвращает STATE в Python для отображения результата.
 
-1) Сделайте резервную копию исходных файлов проекта.
-2) Скопируйте main.cpp, sectors.cpp, sectors.h, spray_zone.*, CMakeLists.txt,
-   spray_config.txt, hand_tracking.py в корень weed_box_parser.
-3) Окно PowerShell #1: .\go.bat (сначала C++ сервер).
-4) Окно PowerShell #2: .\.venv\Scripts\Activate.ps1 ; python hand_tracking.py
-5) Изменения геометрии: spray_config.txt, затем перезапустить C++.
+Порядок действий:
+1. Сделайте резервную копию текущих рабочих файлов.
+2. Скопируйте содержимое папки weed_udp_bridge в корень weed_box_parser,
+   заменив одноименные файлы. Сохраните свой go.bat, его менять не надо.
+3. Проверьте, что Serial Monitor и Serial Plotter Arduino IDE закрыты,
+   и что ESP32 подключена как COM16.
+4. Запустите .\go.bat в PowerShell #1.
+5. Запустите Python в PowerShell #2:
+     .\.venv\Scripts\Activate.ps1
+     python hand_tracking.py
+6. Двигайте рукой между тремя секторами и горизонтальной полосой.
+7. Для прекращения Python нажмите Q в окне камеры.
 
-UDP порт: 5005, только loopback 127.0.0.1.
-Python -> C++: FRAME width height count x y w h [x y w h ...]
-C++ -> Python: STATE sector_count zone_top zone_bottom overlap_percent mask_decimal
+Файлы настройки: spray_config.txt (перезапустить C++ после изменений).
+  sector_count=3  — в общем C++ поддерживаются 1..16,
+                    но ESP32-тест с тремя GPIO принимает ТОЛЬКО 1..3.
+  sector_overlap_percent=5.0
+  spray_zone_top_percent=40.0
+  spray_zone_bottom_percent=60.0
 
-Сектора нумеруются слева направо с нуля, бит 0 — левый сектор.
-Для 3 секторов: 001=левый, 010=центр, 100=правый, 111=все.
+Сохраняются getSectors(), getSectorMask() и isInSprayZone().
+При изменении маски C++ отправляет ее сразу; каждые 200 мс повторяет
+актуальное значение как heartbeat. Если Python молчит 500 мс,
+C++ обнуляет маску. Если компьютер перестает слать Serial-команды,
+ESP32 по тайм-ауту 1000 мс сама выключает выходы.
+Если COM16 не существует или занят, программа сообщит об ошибке.
+При разрыве Serial во время работы программа завершится; для возобновления
+подключения ее нужно перезапустить.
 
-ВАЖНО: COM/ESP32 не подключены на этом этапе. Тайм-аут C++ обнуляет
-маску в памяти, а Python показывает OFFLINE при отсутствии ответа.
-Для реальных клапанов понадобится отдельный watchdog на ESP32.
+Это стенд со светодиодами. Реальные клапаны подключать пока нельзя.
