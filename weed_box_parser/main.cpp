@@ -1,399 +1,212 @@
-#include <opencv2/core.hpp>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/imgcodecs.hpp>
-#include <opencv2/highgui.hpp>
-#include <opencv2/geometry/2d.hpp>
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
 
-#include <iostream>
-#include <filesystem>
+#include <cstdint>
 #include <fstream>
-#include <vector>
-#include <algorithm>
+#include <iomanip>
+#include <iostream>
+#include <sstream>
 #include <string>
-#include <cmath>
+#include <vector>
 
 #include "sectors.h"
 #include "spray_zone.h"
 
-namespace fs = std::filesystem;
+#pragma comment(lib, "Ws2_32.lib")
 
+namespace {
+constexpr unsigned short UDP_PORT = 5005;
+constexpr int MAX_BOXES = 32;
 
-// ======================================================
-// БЛОК НАСТРОЕК
-// ======================================================
-
-// Минимальный процент площади объекта,
-// который должен попадать в сектор.
-const double SECTOR_OVERLAP_PERCENT = 5.0;
-
-// Верхняя граница зоны опрыскивания
-// в процентах от высоты изображения.
-const double SPRAY_ZONE_TOP_PERCENT = 40.0;
-
-// Нижняя граница зоны опрыскивания
-// в процентах от высоты изображения.
-const double SPRAY_ZONE_BOTTOM_PERCENT = 60.0;
-
-// ======================================================
-
-
-struct DetectionBox {
-    int x;
-    int y;
-    int width;
-    int height;
-    double confidence;
+struct Config {
+    int sectorCount = 3;
+    double sectorOverlapPercent = 5.0;
+    double zoneTopPercent = 40.0;
+    double zoneBottomPercent = 60.0;
 };
 
+struct Box { int x = 0, y = 0, width = 0, height = 0; };
+
+bool loadConfig(const std::string& filename, Config& cfg) {
+    std::ifstream file(filename);
+    if (!file) {
+        std::cerr << "Cannot open " << filename << "\n";
+        return false;
+    }
+    std::string line;
+    while (std::getline(file, line)) {
+        const auto hash = line.find('#');
+        if (hash != std::string::npos) line.erase(hash);
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        auto trim = [](std::string s) {
+            const auto start = s.find_first_not_of(" \t\r\n");
+            if (start == std::string::npos) return std::string{};
+            const auto end = s.find_last_not_of(" \t\r\n");
+            return s.substr(start, end - start + 1);
+        };
+        const std::string key = trim(line.substr(0, eq));
+        const std::string value = trim(line.substr(eq + 1));
+        try {
+            std::size_t used = 0;
+            if (key == "sector_count") {
+                int n = std::stoi(value, &used);
+                if (used != value.size()) return false;
+                cfg.sectorCount = n;
+            } else if (key == "sector_overlap_percent") {
+                double v = std::stod(value, &used);
+                if (used != value.size()) return false;
+                cfg.sectorOverlapPercent = v;
+            } else if (key == "spray_zone_top_percent") {
+                double v = std::stod(value, &used);
+                if (used != value.size()) return false;
+                cfg.zoneTopPercent = v;
+            } else if (key == "spray_zone_bottom_percent") {
+                double v = std::stod(value, &used);
+                if (used != value.size()) return false;
+                cfg.zoneBottomPercent = v;
+            }
+        } catch (...) {
+            std::cerr << "Invalid config value for " << key << "\n";
+            return false;
+        }
+    }
+    if (cfg.sectorCount < 1 || cfg.sectorCount > 16 ||
+        !(cfg.sectorOverlapPercent >= 0 && cfg.sectorOverlapPercent <= 100) ||
+        !(cfg.zoneTopPercent >= 0 && cfg.zoneTopPercent < cfg.zoneBottomPercent &&
+          cfg.zoneBottomPercent <= 100)) {
+        std::cerr << "Invalid settings: sectors=1..16, overlap=0..100, 0<=top<bottom<=100\n";
+        return false;
+    }
+    return true;
+}
+
+bool parseFrame(const std::string& packet, int& width, int& height,
+                std::vector<Box>& boxes) {
+    std::istringstream in(packet);
+    std::string tag;
+    int count = 0;
+    if (!(in >> tag >> width >> height >> count) || tag != "FRAME" ||
+        width <= 0 || height <= 0 || width > 8192 || height > 8192 ||
+        count < 0 || count > MAX_BOXES) return false;
+
+    boxes.clear();
+    for (int i = 0; i < count; ++i) {
+        Box b;
+        if (!(in >> b.x >> b.y >> b.width >> b.height) ||
+            b.width <= 0 || b.height <= 0 || b.x < 0 || b.y < 0 ||
+            static_cast<std::int64_t>(b.x) + b.width > width ||
+            static_cast<std::int64_t>(b.y) + b.height > height) return false;
+        boxes.push_back(b);
+    }
+    std::string extra;
+    return !(in >> extra);
+}
+
+std::string binaryMask(std::uint32_t mask, int count) {
+    std::string s;
+    for (int i = count - 1; i >= 0; --i)
+        s += (mask & (std::uint32_t{1} << i)) ? '1' : '0';
+    return s;
+}
+}
 
 int main() {
+    Config cfg;
+    if (!loadConfig("spray_config.txt", cfg)) return 1;
 
-    const fs::path inputDir = "input";
-    const fs::path outputDir = "output";
-    const fs::path csvPath = outputDir / "coordinates.csv";
-
-    if (!fs::exists(inputDir)) {
-        std::cerr << "Input directory not found!\n";
+    WSADATA wsa{};
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        std::cerr << "WSAStartup failed\n";
+        return 1;
+    }
+    SOCKET server = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (server == INVALID_SOCKET) {
+        std::cerr << "socket failed: " << WSAGetLastError() << "\n";
+        WSACleanup();
         return 1;
     }
 
-    fs::create_directories(outputDir);
-
-    std::ofstream csv(csvPath);
-
-    if (!csv.is_open()) {
-        std::cerr << "Cannot open CSV file!\n";
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_port = htons(UDP_PORT);
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (bind(server, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
+        std::cerr << "UDP bind failed (port in use?): " << WSAGetLastError() << "\n";
+        closesocket(server);
+        WSACleanup();
         return 1;
     }
 
-    csv << "image,x,y,width,height,x2,y2,confidence,sectors,y0,spray\n";
+    DWORD timeoutMs = 500;
+    setsockopt(server, SOL_SOCKET, SO_RCVTIMEO,
+               reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
 
-    int processedImages = 0;
+    std::cout << "C++ UDP bridge on 127.0.0.1:" << UDP_PORT << "\n"
+              << "Sectors: " << cfg.sectorCount << ", overlap: "
+              << cfg.sectorOverlapPercent << "%\n"
+              << "Spray zone: " << cfg.zoneTopPercent << "-"
+              << cfg.zoneBottomPercent << "%\n"
+              << "Waiting for Python... (Ctrl+C to stop)\n";
 
-    for (const auto& entry : fs::directory_iterator(inputDir)) {
-
-        if (!entry.is_regular_file()) {
-            continue;
-        }
-
-        const fs::path imagePath = entry.path();
-
-        std::string extension = imagePath.extension().string();
-
-        std::transform(
-            extension.begin(),
-            extension.end(),
-            extension.begin(),
-            [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            }
-        );
-
-        if (extension != ".jpg" &&
-            extension != ".jpeg" &&
-            extension != ".png" &&
-            extension != ".bmp" &&
-            extension != ".webp") {
-            continue;
-        }
-
-        cv::Mat image = cv::imread(imagePath.string());
-
-        if (image.empty()) {
-            std::cerr << "Cannot read image: "
-                      << imagePath.filename() << '\n';
-            continue;
-        }
-
-        const std::string filename =
-            imagePath.filename().string();
-
-        std::cout << "Processing: " << filename << '\n';
-
-        // --------------------------------------------------
-        // 1. ПЕРЕВОД ИЗОБРАЖЕНИЯ В HSV
-        // --------------------------------------------------
-
-        cv::Mat hsv;
-        cv::cvtColor(image, hsv, cv::COLOR_BGR2HSV);
-
-        // --------------------------------------------------
-        // 2. МАСКИ ЦВЕТОВ
-        // --------------------------------------------------
-
-        cv::Mat turquoiseMask;
-        cv::Mat blueMask;
-        cv::Mat mask;
-
-        cv::inRange(
-            hsv,
-            cv::Scalar(75, 60, 60),
-            cv::Scalar(105, 255, 255),
-            turquoiseMask
-        );
-
-        cv::inRange(
-            hsv,
-            cv::Scalar(90, 60, 60),
-            cv::Scalar(135, 255, 255),
-            blueMask
-        );
-
-        cv::bitwise_or(
-            turquoiseMask,
-            blueMask,
-            mask
-        );
-
-        // --------------------------------------------------
-        // 3. МОРФОЛОГИЧЕСКАЯ ОБРАБОТКА
-        // --------------------------------------------------
-
-        cv::Mat kernel = cv::getStructuringElement(
-            cv::MORPH_RECT,
-            cv::Size(3, 3)
-        );
-
-        cv::morphologyEx(
-            mask,
-            mask,
-            cv::MORPH_CLOSE,
-            kernel
-        );
-
-        // --------------------------------------------------
-        // 4. ПОИСК КОНТУРОВ
-        // --------------------------------------------------
-
-        std::vector<std::vector<cv::Point>> contours;
-
-        cv::findContours(
-            mask,
-            contours,
-            cv::RETR_EXTERNAL,
-            cv::CHAIN_APPROX_SIMPLE
-        );
-
-        std::vector<DetectionBox> boxes;
-
-        // --------------------------------------------------
-        // 5. ФИЛЬТРАЦИЯ И СОХРАНЕНИЕ ПРЯМОУГОЛЬНИКОВ
-        // --------------------------------------------------
-
-        for (const auto& contour : contours) {
-
-            const double area = cv::contourArea(contour);
-
-            if (area <= 300.0) {
-                continue;
-            }
-
-            const cv::Rect rect = cv::boundingRect(contour);
-
-            if (rect.width < 15 || rect.height < 15) {
-                continue;
-            }
-
-            if (rect.width > image.cols * 0.95 ||
-                rect.height > image.rows * 0.95) {
-                continue;
-            }
-
-            DetectionBox box;
-
-            box.x = rect.x;
-            box.y = rect.y;
-            box.width = rect.width;
-            box.height = rect.height;
-            box.confidence = 1.0;
-
-            boxes.push_back(box);
-        }
-
-        // --------------------------------------------------
-        // 6. СОРТИРОВКА ОБЪЕКТОВ
-        // --------------------------------------------------
-
-        std::sort(
-            boxes.begin(),
-            boxes.end(),
-            [](const DetectionBox& a, const DetectionBox& b) {
-
-                if (a.y != b.y) {
-                    return a.y < b.y;
+    std::uint32_t previousMask = 0;
+    bool connectionActive = false;
+    while (true) {
+        char buffer[4096];
+        sockaddr_in sender{};
+        int senderLen = sizeof(sender);
+        int size = recvfrom(server, buffer, sizeof(buffer), 0,
+                            reinterpret_cast<sockaddr*>(&sender), &senderLen);
+        if (size == SOCKET_ERROR) {
+            if (WSAGetLastError() == WSAETIMEDOUT) {
+                if (connectionActive) {
+                    std::cout << "Python timeout: mask -> 0 (safe state)\n";
+                    previousMask = 0;
+                    connectionActive = false;
                 }
-
-                return a.x < b.x;
+                continue;
             }
-        );
+            std::cerr << "recvfrom failed: " << WSAGetLastError() << "\n";
+            break;
+        }
+        // Local-only control channel.
+        if (sender.sin_addr.s_addr != htonl(INADDR_LOOPBACK)) continue;
 
-        // --------------------------------------------------
-        // 7. ПОДГОТОВКА ПРЕВЬЮ
-        // --------------------------------------------------
-
-        cv::Mat preview = image.clone();
-
-        // Вертикальные границы секторов.
-        const int sectorX1 = static_cast<int>(
-            std::round(image.cols / 3.0)
-        );
-
-        const int sectorX2 = static_cast<int>(
-            std::round(2.0 * image.cols / 3.0)
-        );
-
-        cv::line(
-            preview,
-            cv::Point(sectorX1, 0),
-            cv::Point(sectorX1, image.rows - 1),
-            cv::Scalar(255, 0, 0),
-            2
-        );
-
-        cv::line(
-            preview,
-            cv::Point(sectorX2, 0),
-            cv::Point(sectorX2, image.rows - 1),
-            cv::Scalar(255, 0, 0),
-            2
-        );
-
-        // Горизонтальные границы зоны опрыскивания.
-        const int sprayZoneTop = static_cast<int>(
-            std::round(
-                image.rows * SPRAY_ZONE_TOP_PERCENT / 100.0
-            )
-        );
-
-        const int sprayZoneBottom = static_cast<int>(
-            std::round(
-                image.rows * SPRAY_ZONE_BOTTOM_PERCENT / 100.0
-            )
-        );
-
-        cv::line(
-            preview,
-            cv::Point(0, sprayZoneTop),
-            cv::Point(image.cols - 1, sprayZoneTop),
-            cv::Scalar(0, 255, 255),
-            2
-        );
-
-        cv::line(
-            preview,
-            cv::Point(0, sprayZoneBottom),
-            cv::Point(image.cols - 1, sprayZoneBottom),
-            cv::Scalar(0, 255, 255),
-            2
-        );
-
-        // --------------------------------------------------
-        // 8. ОБРАБОТКА КАЖДОГО ОБЪЕКТА
-        // --------------------------------------------------
-
-        for (const auto& b : boxes) {
-
-            const int x2 = b.x + b.width;
-            const int y2 = b.y + b.height;
-
-            // Определяем, какие вертикальные секторы
-            // пересекаются с прямоугольником объекта.
-            const std::string sectors = getSectors(
-                image.cols,
-                b.x,
-                b.y,
-                b.width,
-                b.height,
-                SECTOR_OVERLAP_PERCENT
-            );
-
-            // Нижняя точка прямоугольника объекта.
-            const int y0 = b.y + b.height;
-
-            // Проверяем попадание нижней точки
-            // в горизонтальную зону опрыскивания.
-            const int spray = isInSprayZone(
-                image.rows,
-                b.y,
-                b.height,
-                SPRAY_ZONE_TOP_PERCENT,
-                SPRAY_ZONE_BOTTOM_PERCENT
-            );
-
-            // Рисуем прямоугольник объекта.
-            cv::rectangle(
-                preview,
-                cv::Point(b.x, b.y),
-                cv::Point(x2, y2),
-                cv::Scalar(0, 255, 0),
-                2
-            );
-
-            // Отмечаем нижнюю точку объекта.
-            cv::circle(
-                preview,
-                cv::Point(b.x + b.width / 2, y0),
-                4,
-                cv::Scalar(0, 0, 255),
-                -1
-            );
-
-            // Подпись объекта.
-            const std::string label =
-                "S:" + sectors + " Spray:" + std::to_string(spray);
-
-            cv::putText(
-                preview,
-                label,
-                cv::Point(b.x, std::max(15, b.y - 5)),
-                cv::FONT_HERSHEY_SIMPLEX,
-                0.45,
-                cv::Scalar(0, 255, 0),
-                1
-            );
-
-            // --------------------------------------------------
-            // 9. ЗАПИСЬ В CSV
-            // --------------------------------------------------
-
-            csv << '"'
-                << filename << "\","
-                << b.x << ','
-                << b.y << ','
-                << b.width << ','
-                << b.height << ','
-                << x2 << ','
-                << y2 << ','
-                << b.confidence << ','
-                << '"'
-                << sectors << "\","
-                << y0 << ','
-                << spray << '\n';
+        int frameWidth = 0, frameHeight = 0;
+        std::vector<Box> boxes;
+        std::uint32_t mask = 0;
+        if (parseFrame(std::string(buffer, buffer + size), frameWidth, frameHeight, boxes)) {
+            for (const Box& b : boxes) {
+                if (isInSprayZone(frameHeight, b.y, b.height,
+                                  cfg.zoneTopPercent, cfg.zoneBottomPercent)) {
+                    mask |= getSectorMask(frameWidth, b.x, b.y, b.width, b.height,
+                                          cfg.sectorOverlapPercent, cfg.sectorCount);
+                }
+            }
+            if (!connectionActive || mask != previousMask) {
+                std::cout << "Objects: " << boxes.size() << " | mask: "
+                          << binaryMask(mask, cfg.sectorCount) << " (" << mask << ")\n";
+            }
+            connectionActive = true;
+            previousMask = mask;
+        } else {
+            // Invalid input means no actuation; do not trust stale coordinates.
+            if (previousMask != 0) std::cout << "Invalid frame: mask -> 0\n";
+            previousMask = 0;
         }
 
-        // --------------------------------------------------
-        // 10. СОХРАНЕНИЕ ПРЕВЬЮ
-        // --------------------------------------------------
-
-        const fs::path outputPath =
-            outputDir / (imagePath.stem().string() + "_preview.jpg");
-
-        cv::imwrite(outputPath.string(), preview);
-
-        processedImages++;
-
-        std::cout << "Detected objects: "
-                  << boxes.size() << '\n';
+        std::ostringstream out;
+        out << std::setprecision(8) << "STATE " << cfg.sectorCount << ' '
+            << cfg.zoneTopPercent << ' ' << cfg.zoneBottomPercent << ' '
+            << cfg.sectorOverlapPercent << ' ' << mask;
+        const std::string reply = out.str();
+        sendto(server, reply.data(), static_cast<int>(reply.size()), 0,
+               reinterpret_cast<sockaddr*>(&sender), senderLen);
     }
 
-    csv.close();
-
-    std::cout << "\n================================\n";
-    std::cout << "Processed images: "
-              << processedImages << '\n';
-    std::cout << "CSV saved: "
-              << csvPath << '\n';
-    std::cout << "================================\n";
-
+    closesocket(server);
+    WSACleanup();
     return 0;
 }

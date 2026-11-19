@@ -1,0 +1,771 @@
+cmake
+cmake_minimum_required(VERSION 3.20)
+project(weed_box_parser LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(OpenCV_DIR
+    "C:/Users/fang/Desktop/study/libraryCPP/opencv/build"
+)
+
+find_package(OpenCV REQUIRED CONFIG)
+
+add_executable(weed_box_parser
+    main.cpp
+    sectors.cpp
+    spray_zone.cpp
+)
+
+target_include_directories(weed_box_parser PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(weed_box_parser PRIVATE
+    ${OpenCV_LIBS}
+)
+
+go.bat (
+@echo off
+cd /d "%~dp0"
+
+cmake -S . -B build
+if errorlevel 1 goto error
+
+cmake --build build --parallel
+if errorlevel 1 goto error
+
+echo.
+echo === RUNNING PROGRAM ===
+set "PATH=C:\Users\fang\Desktop\study\libraryCPP\opencv\build\x64\vc16\bin;%PATH%"
+".\build\Debug\weed_box_parser.exe"
+
+echo.
+echo === PROGRAM FINISHED ===
+pause
+exit /b 0
+
+:error
+echo.
+echo === BUILD FAILED ===
+pause
+exit /b 1
+) hand_tracking.py(
+import cv2
+import mediapipe as mp
+
+# Настройки камеры
+CAMERA_ID = 0
+FRAME_WIDTH = 1280
+FRAME_HEIGHT = 720
+
+# Инициализация MediaPipe
+mp_hands = mp.solutions.hands
+mp_draw = mp.solutions.drawing_utils
+
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=2,
+    model_complexity=1,
+    min_detection_confidence=0.6,
+    min_tracking_confidence=0.5
+)
+
+# Открываем камеру
+cap = cv2.VideoCapture(CAMERA_ID, cv2.CAP_DSHOW)
+
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+if not cap.isOpened():
+    print("ERROR: Cannot open camera")
+    raise SystemExit(1)
+
+print("Camera started.")
+print("Press Q to exit.")
+
+while True:
+    ret, frame = cap.read()
+
+    if not ret:
+        print("ERROR: Cannot read frame")
+        break
+
+    # Зеркальное отображение для удобства
+    frame = cv2.flip(frame, 1)
+
+    frame_height, frame_width = frame.shape[:2]
+
+    # MediaPipe ожидает RGB
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    results = hands.process(rgb)
+
+    detections = []
+
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+
+            # Рисуем скелет руки
+            mp_draw.draw_landmarks(
+                frame,
+                hand_landmarks,
+                mp_hands.HAND_CONNECTIONS
+            )
+
+            # Получаем координаты всех точек
+            xs = [
+                int(point.x * frame_width)
+                for point in hand_landmarks.landmark
+            ]
+
+            ys = [
+                int(point.y * frame_height)
+                for point in hand_landmarks.landmark
+            ]
+
+            # Bounding box
+            x_min = max(0, min(xs))
+            y_min = max(0, min(ys))
+            x_max = min(frame_width - 1, max(xs))
+            y_max = min(frame_height - 1, max(ys))
+
+            width = x_max - x_min
+            height = y_max - y_min
+
+            if width <= 0 or height <= 0:
+                continue
+
+            bbox = {
+                "x": x_min,
+                "y": y_min,
+                "width": width,
+                "height": height
+            }
+
+            detections.append(bbox)
+
+            # Рисуем рамку
+            cv2.rectangle(
+                frame,
+                (x_min, y_min),
+                (x_max, y_max),
+                (0, 255, 0),
+                2
+            )
+
+            # Нижняя точка рамки
+            bottom_point = (x_min + width // 2, y_max)
+
+            cv2.circle(
+                frame,
+                bottom_point,
+                7,
+                (0, 0, 255),
+                -1
+            )
+
+            cv2.putText(
+                frame,
+                f"Hand: {x_min},{y_min},{width},{height}",
+                (x_min, max(25, y_min - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 0),
+                2
+            )
+
+    # Границы трех вертикальных секторов
+    for i in range(1, 3):
+        x = int(frame_width * i / 3)
+
+        cv2.line(
+            frame,
+            (x, 0),
+            (x, frame_height),
+            (255, 255, 0),
+            2
+        )
+
+    # Полоса зоны распыления: 40-60% высоты
+    zone_top = int(frame_height * 0.40)
+    zone_bottom = int(frame_height * 0.60)
+
+    cv2.line(
+        frame,
+        (0, zone_top),
+        (frame_width, zone_top),
+        (0, 165, 255),
+        2
+    )
+
+    cv2.line(
+        frame,
+        (0, zone_bottom),
+        (frame_width, zone_bottom),
+        (0, 165, 255),
+        2
+    )
+
+    cv2.putText(
+        frame,
+        f"Frame: {frame_width}x{frame_height}",
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2
+    )
+
+    cv2.putText(
+        frame,
+        f"Detected hands: {len(detections)}",
+        (10, 60),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2
+    )
+
+    cv2.imshow("Hand Tracking - Weed Box Parser", frame)
+
+    # Q — выход
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break
+
+cap.release()
+hands.close()
+cv2.destroyAllWindows()
+
+print("Camera stopped.")
+) main.cpp (#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/highgui.hpp>
+#include <opencv2/geometry/2d.hpp>
+
+#include <iostream>
+#include <filesystem>
+#include <fstream>
+#include <vector>
+#include <algorithm>
+#include <string>
+#include <cmath>
+
+#include "sectors.h"
+#include "spray_zone.h"
+
+namespace fs = std::filesystem;
+
+
+// ======================================================
+// БЛОК НАСТРОЕК
+// ======================================================
+
+// Минимальный процент площади объекта,
+// который должен попадать в сектор.
+const double SECTOR_OVERLAP_PERCENT = 5.0;
+
+// Верхняя граница зоны опрыскивания
+// в процентах от высоты изображения.
+const double SPRAY_ZONE_TOP_PERCENT = 40.0;
+
+// Нижняя граница зоны опрыскивания
+// в процентах от высоты изображения.
+const double SPRAY_ZONE_BOTTOM_PERCENT = 60.0;
+
+// ======================================================
+
+
+struct DetectionBox {
+    int x;
+    int y;
+    int width;
+    int height;
+    double confidence;
+};
+
+
+int main() {
+
+    const fs::path inputDir = "input";
+    const fs::path outputDir = "output";
+    const fs::path csvPath = outputDir / "coordinates.csv";
+
+    if (!fs::exists(inputDir)) {
+        std::cerr << "Input directory not found!\n";
+        return 1;
+    }
+
+    fs::create_directories(outputDir);
+
+    std::ofstream csv(csvPath);
+
+    if (!csv.is_open()) {
+        std::cerr << "Cannot open CSV file!\n";
+        return 1;
+    }
+
+    csv << "image,x,y,width,height,x2,y2,confidence,sectors,y0,spray\n";
+
+    int processedImages = 0;
+
+    for (const auto& entry : fs::directory_iterator(inputDir)) {
+
+        if (!entry.is_regular_file()) {
+            continue;
+        }
+
+        const fs::path imagePath = entry.path();
+
+        std::string extension = imagePath.extension().string();
+
+        std::transform(
+            extension.begin(),
+            extension.end(),
+            extension.begin(),
+            [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            }
+        );
+
+        if (extension != ".jpg" &&
+            extension != ".jpeg" &&
+            extension != ".png" &&
+            extension != ".bmp" &&
+            extension != ".webp") {
+            continue;
+        }
+
+        cv::Mat image = cv::imread(imagePath.string());
+
+        if (image.empty()) {
+            std::cerr << "Cannot read image: "
+                      << imagePath.filename() << '\n';
+            continue;
+        }
+
+        const std::string filename =
+            imagePath.filename().string();
+
+        std::cout << "Processing: " << filename << '\n';
+
+        // --------------------------------------------------
+        // 1. ПЕРЕВОД ИЗОБРАЖЕНИЯ В HSV
+        // --------------------------------------------------
+
+        cv::Mat hsv;
+        cv::cvtColor(image, hsv, cv::COLOR_BGR2HSV);
+
+        // --------------------------------------------------
+        // 2. МАСКИ ЦВЕТОВ
+        // --------------------------------------------------
+
+        cv::Mat turquoiseMask;
+        cv::Mat blueMask;
+        cv::Mat mask;
+
+        cv::inRange(
+            hsv,
+            cv::Scalar(75, 60, 60),
+            cv::Scalar(105, 255, 255),
+            turquoiseMask
+        );
+
+        cv::inRange(
+            hsv,
+            cv::Scalar(90, 60, 60),
+            cv::Scalar(135, 255, 255),
+            blueMask
+        );
+
+        cv::bitwise_or(
+            turquoiseMask,
+            blueMask,
+            mask
+        );
+
+        // --------------------------------------------------
+        // 3. МОРФОЛОГИЧЕСКАЯ ОБРАБОТКА
+        // --------------------------------------------------
+
+        cv::Mat kernel = cv::getStructuringElement(
+            cv::MORPH_RECT,
+            cv::Size(3, 3)
+        );
+
+        cv::morphologyEx(
+            mask,
+            mask,
+            cv::MORPH_CLOSE,
+            kernel
+        );
+
+        // --------------------------------------------------
+        // 4. ПОИСК КОНТУРОВ
+        // --------------------------------------------------
+
+        std::vector<std::vector<cv::Point>> contours;
+
+        cv::findContours(
+            mask,
+            contours,
+            cv::RETR_EXTERNAL,
+            cv::CHAIN_APPROX_SIMPLE
+        );
+
+        std::vector<DetectionBox> boxes;
+
+        // --------------------------------------------------
+        // 5. ФИЛЬТРАЦИЯ И СОХРАНЕНИЕ ПРЯМОУГОЛЬНИКОВ
+        // --------------------------------------------------
+
+        for (const auto& contour : contours) {
+
+            const double area = cv::contourArea(contour);
+
+            if (area <= 300.0) {
+                continue;
+            }
+
+            const cv::Rect rect = cv::boundingRect(contour);
+
+            if (rect.width < 15 || rect.height < 15) {
+                continue;
+            }
+
+            if (rect.width > image.cols * 0.95 ||
+                rect.height > image.rows * 0.95) {
+                continue;
+            }
+
+            DetectionBox box;
+
+            box.x = rect.x;
+            box.y = rect.y;
+            box.width = rect.width;
+            box.height = rect.height;
+            box.confidence = 1.0;
+
+            boxes.push_back(box);
+        }
+
+        // --------------------------------------------------
+        // 6. СОРТИРОВКА ОБЪЕКТОВ
+        // --------------------------------------------------
+
+        std::sort(
+            boxes.begin(),
+            boxes.end(),
+            [](const DetectionBox& a, const DetectionBox& b) {
+
+                if (a.y != b.y) {
+                    return a.y < b.y;
+                }
+
+                return a.x < b.x;
+            }
+        );
+
+        // --------------------------------------------------
+        // 7. ПОДГОТОВКА ПРЕВЬЮ
+        // --------------------------------------------------
+
+        cv::Mat preview = image.clone();
+
+        // Вертикальные границы секторов.
+        const int sectorX1 = static_cast<int>(
+            std::round(image.cols / 3.0)
+        );
+
+        const int sectorX2 = static_cast<int>(
+            std::round(2.0 * image.cols / 3.0)
+        );
+
+        cv::line(
+            preview,
+            cv::Point(sectorX1, 0),
+            cv::Point(sectorX1, image.rows - 1),
+            cv::Scalar(255, 0, 0),
+            2
+        );
+
+        cv::line(
+            preview,
+            cv::Point(sectorX2, 0),
+            cv::Point(sectorX2, image.rows - 1),
+            cv::Scalar(255, 0, 0),
+            2
+        );
+
+        // Горизонтальные границы зоны опрыскивания.
+        const int sprayZoneTop = static_cast<int>(
+            std::round(
+                image.rows * SPRAY_ZONE_TOP_PERCENT / 100.0
+            )
+        );
+
+        const int sprayZoneBottom = static_cast<int>(
+            std::round(
+                image.rows * SPRAY_ZONE_BOTTOM_PERCENT / 100.0
+            )
+        );
+
+        cv::line(
+            preview,
+            cv::Point(0, sprayZoneTop),
+            cv::Point(image.cols - 1, sprayZoneTop),
+            cv::Scalar(0, 255, 255),
+            2
+        );
+
+        cv::line(
+            preview,
+            cv::Point(0, sprayZoneBottom),
+            cv::Point(image.cols - 1, sprayZoneBottom),
+            cv::Scalar(0, 255, 255),
+            2
+        );
+
+        // --------------------------------------------------
+        // 8. ОБРАБОТКА КАЖДОГО ОБЪЕКТА
+        // --------------------------------------------------
+
+        for (const auto& b : boxes) {
+
+            const int x2 = b.x + b.width;
+            const int y2 = b.y + b.height;
+
+            // Определяем, какие вертикальные секторы
+            // пересекаются с прямоугольником объекта.
+            const std::string sectors = getSectors(
+                image.cols,
+                b.x,
+                b.y,
+                b.width,
+                b.height,
+                SECTOR_OVERLAP_PERCENT
+            );
+
+            // Нижняя точка прямоугольника объекта.
+            const int y0 = b.y + b.height;
+
+            // Проверяем попадание нижней точки
+            // в горизонтальную зону опрыскивания.
+            const int spray = isInSprayZone(
+                image.rows,
+                b.y,
+                b.height,
+                SPRAY_ZONE_TOP_PERCENT,
+                SPRAY_ZONE_BOTTOM_PERCENT
+            );
+
+            // Рисуем прямоугольник объекта.
+            cv::rectangle(
+                preview,
+                cv::Point(b.x, b.y),
+                cv::Point(x2, y2),
+                cv::Scalar(0, 255, 0),
+                2
+            );
+
+            // Отмечаем нижнюю точку объекта.
+            cv::circle(
+                preview,
+                cv::Point(b.x + b.width / 2, y0),
+                4,
+                cv::Scalar(0, 0, 255),
+                -1
+            );
+
+            // Подпись объекта.
+            const std::string label =
+                "S:" + sectors + " Spray:" + std::to_string(spray);
+
+            cv::putText(
+                preview,
+                label,
+                cv::Point(b.x, std::max(15, b.y - 5)),
+                cv::FONT_HERSHEY_SIMPLEX,
+                0.45,
+                cv::Scalar(0, 255, 0),
+                1
+            );
+
+            // --------------------------------------------------
+            // 9. ЗАПИСЬ В CSV
+            // --------------------------------------------------
+
+            csv << '"'
+                << filename << "\","
+                << b.x << ','
+                << b.y << ','
+                << b.width << ','
+                << b.height << ','
+                << x2 << ','
+                << y2 << ','
+                << b.confidence << ','
+                << '"'
+                << sectors << "\","
+                << y0 << ','
+                << spray << '\n';
+        }
+
+        // --------------------------------------------------
+        // 10. СОХРАНЕНИЕ ПРЕВЬЮ
+        // --------------------------------------------------
+
+        const fs::path outputPath =
+            outputDir / (imagePath.stem().string() + "_preview.jpg");
+
+        cv::imwrite(outputPath.string(), preview);
+
+        processedImages++;
+
+        std::cout << "Detected objects: "
+                  << boxes.size() << '\n';
+    }
+
+    csv.close();
+
+    std::cout << "\n================================\n";
+    std::cout << "Processed images: "
+              << processedImages << '\n';
+    std::cout << "CSV saved: "
+              << csvPath << '\n';
+    std::cout << "================================\n";
+
+    return 0;
+}) sectros.cpp (#include "sectors.h"
+
+#include <algorithm>
+#include <string>
+
+std::string getSectors(
+    int frameWidth,
+    int x,
+    int y,
+    int width,
+    int height,
+    double minOverlapPercent
+) {
+    if (frameWidth <= 0 || width <= 0 || height <= 0) {
+        return "";
+    }
+
+    if (minOverlapPercent < 0.0 || minOverlapPercent > 100.0) {
+        return "";
+    }
+
+    // Границы трёх равных вертикальных секторов.
+    const double bounds[] = {
+        0.0,
+        frameWidth / 3.0,
+        2.0 * frameWidth / 3.0,
+        static_cast<double>(frameWidth)
+    };
+
+    const double boxLeft = x;
+    const double boxRight = x + width;
+
+    const double boxArea =
+        static_cast<double>(width) * height;
+
+    const char* names[] = {
+        "left",
+        "center",
+        "right"
+    };
+
+    std::string result;
+
+    for (int i = 0; i < 3; ++i) {
+
+        const double overlapLeft =
+            std::max(boxLeft, bounds[i]);
+
+        const double overlapRight =
+            std::min(boxRight, bounds[i + 1]);
+
+        const double overlapWidth =
+            std::max(0.0, overlapRight - overlapLeft);
+
+        const double overlapArea =
+            overlapWidth * height;
+
+        const double percentage =
+            (overlapArea / boxArea) * 100.0;
+
+        if (percentage >= minOverlapPercent) {
+
+            if (!result.empty()) {
+                result += ";";
+            }
+
+            result += names[i];
+        }
+    }
+
+    return result;
+}) sectors.h (
+// Определяет, в каких вертикальных секторах находится объект.
+// Если пересечение с сектором меньше 5% площади объекта,
+// этот сектор не включается в результат.
+//
+// Возвращает, например: "left", "left;center" или "right".
+
+#pragma once
+
+#include <string>
+
+std::string getSectors(
+    int frameWidth,
+    int x,
+    int y,
+    int width,
+    int height,
+    double minOverlapPercent
+);
+
+) spray_zone.cpp (#include "spray_zone.h"
+
+int isInSprayZone(
+    int frameHeight,
+    int y,
+    int objectHeight,
+    double topPercent,
+    double bottomPercent
+) {
+    if (frameHeight <= 0 || objectHeight <= 0) {
+        return 0;
+    }
+
+    if (topPercent < 0.0 ||
+        topPercent > 100.0 ||
+        bottomPercent < 0.0 ||
+        bottomPercent > 100.0 ||
+        topPercent >= bottomPercent) {
+        return 0;
+    }
+
+    // Нижняя точка прямоугольника объекта.
+    const double y0 = y + objectHeight;
+
+    // Верхняя и нижняя границы зоны опрыскивания.
+    const double zoneTop =
+        frameHeight * topPercent / 100.0;
+
+    const double zoneBottom =
+        frameHeight * bottomPercent / 100.0;
+
+    // Проверяем, находится ли нижняя точка внутри зоны.
+    return (y0 >= zoneTop && y0 <= zoneBottom) ? 1 : 0;
+}) spray_zone.h(#pragma once
+
+int isInSprayZone(
+    int frameHeight,
+    int y,
+    int objectHeight,
+    double topPercent,
+    double bottomPercent
+);)

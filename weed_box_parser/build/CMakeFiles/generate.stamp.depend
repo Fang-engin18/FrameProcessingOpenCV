@@ -10,8 +10,6 @@ C:/Program Files/CMake/share/cmake-4.5/Modules/CMakeSystemSpecificInitialize.cma
 C:/Program Files/CMake/share/cmake-4.5/Modules/Compiler/CMakeCommonCompilerMacros.cmake
 C:/Program Files/CMake/share/cmake-4.5/Modules/Compiler/MSVC-CXX.cmake
 C:/Program Files/CMake/share/cmake-4.5/Modules/Compiler/MSVC.cmake
-C:/Program Files/CMake/share/cmake-4.5/Modules/FindPackageHandleStandardArgs.cmake
-C:/Program Files/CMake/share/cmake-4.5/Modules/FindPackageMessage.cmake
 C:/Program Files/CMake/share/cmake-4.5/Modules/Internal/CMakeCXXLinkerInformation.cmake
 C:/Program Files/CMake/share/cmake-4.5/Modules/Internal/CMakeCommonLinkerInformation.cmake
 C:/Program Files/CMake/share/cmake-4.5/Modules/Linker/MSVC-CXX.cmake
@@ -27,9 +25,3 @@ C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/CMakeLists.
 C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build/CMakeFiles/4.5.0-rc1/CMakeCXXCompiler.cmake
 C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build/CMakeFiles/4.5.0-rc1/CMakeRCCompiler.cmake
 C:/Users/fang/Desktop/study/DSTU_work/platform_brain/weed_box_parser/build/CMakeFiles/4.5.0-rc1/CMakeSystem.cmake
-C:/Users/fang/Desktop/study/libraryCPP/opencv/build/OpenCVConfig-version.cmake
-C:/Users/fang/Desktop/study/libraryCPP/opencv/build/OpenCVConfig.cmake
-C:/Users/fang/Desktop/study/libraryCPP/opencv/build/x64/vc16/lib/OpenCVConfig.cmake
-C:/Users/fang/Desktop/study/libraryCPP/opencv/build/x64/vc16/lib/OpenCVModules-debug.cmake
-C:/Users/fang/Desktop/study/libraryCPP/opencv/build/x64/vc16/lib/OpenCVModules-release.cmake
-C:/Users/fang/Desktop/study/libraryCPP/opencv/build/x64/vc16/lib/OpenCVModules.cmake
